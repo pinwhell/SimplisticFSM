@@ -81,7 +81,7 @@ int main() {
 ```
 
 ### Build and Run
-
+Ensure you link against `simplistic-fsm` 
 
 ## Contributions
 
@@ -90,6 +90,3 @@ Contributions are welcome! Please open issues or submit pull requests for improv
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-Ensure you link against `simplistic-fsm` 
-
