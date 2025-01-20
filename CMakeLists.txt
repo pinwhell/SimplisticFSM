@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(simplistic-fsm)
+include_directories(include)
 add_library(fsm INTERFACE)
 add_library(simplistic::fsm ALIAS fsm)
 target_include_directories(fsm INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
+target_compile_features(fsm INTERFACE cxx_std_17)
 add_subdirectory(examples)
 
 install(TARGETS fsm

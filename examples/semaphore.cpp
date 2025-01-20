@@ -1,46 +1,55 @@
 #include <iostream>
 #include <thread>
-#include <simplistic/fsm.h>
+//#include <simplistic/fsm.h>
+#include "../include/simplistic/fsm.h"
 
-class GreenLightState : public simplistic::fsm::IState {
+using namespace simplistic::fsm;
+
+class SemaphoreController : public simplistic::fsm::Context {
 public:
-	void Handle(simplistic::fsm::IContext* ctx);
-};
-class RedLightState : public simplistic::fsm::IState {
-public:
-	void Handle(simplistic::fsm::IContext* ctx);
-};
-class OrangeLightState : public simplistic::fsm::IState {
-public:
-	void Handle(simplistic::fsm::IContext* ctx);
+	SemaphoreController()
+		: simplistic::fsm::Context(SFSM_THISCTXSTATE(SemaphoreController::GreenLightState))
+	{}
+
+	void GreenLightState(simplistic::fsm::IContext* ctx, bool entry)
+	{
+		if (entry) return;
+		std::cout << "Light is Green | Free to go.\n";
+		std::this_thread::sleep_for(std::chrono::seconds(5));
+		ctx->SetState(std::make_unique<OrangeLightState>(this));
+	}
+
+	class OrangeLightState : public simplistic::fsm::IState {
+	public:
+		OrangeLightState(SemaphoreController* crller)
+			: mController(crller)
+		{}
+
+		void Handle(simplistic::fsm::IContext* ctx)
+		{
+			std::cout << "Light is Orange | Slow Down.\n";
+			std::this_thread::sleep_for(std::chrono::seconds(2));
+			ctx->SetState(SFSM_CTXSTATE(
+				ctx,
+				SemaphoreController::RedLightState,
+				mController));
+		}
+		SemaphoreController* mController;
+	};
+
+	void RedLightState(simplistic::fsm::IContext* ctx, bool entry)
+	{
+		if (entry) return;
+		std::cout << "Light is RED | Stop.\n";
+		std::this_thread::sleep_for(std::chrono::seconds(10));
+		ctx->SetState(SFSM_THISCTXSTATE(SemaphoreController::GreenLightState));
+	}
 };
 
 int main()
 {
-	simplistic::fsm::Context semaphore(
-		std::make_unique<RedLightState>());
+	SemaphoreController semCtrller;
 
 	while (true)
-		semaphore.Handle();
-}
-
-void GreenLightState::Handle(simplistic::fsm::IContext* ctx)
-{
-	std::cout << "Light is Green | Free to go.\n";
-	std::this_thread::sleep_for(std::chrono::seconds(5));
-	ctx->SetState(std::make_unique<OrangeLightState>());
-}
-
-void OrangeLightState::Handle(simplistic::fsm::IContext* ctx)
-{
-	std::cout << "Light is Orange | Slow Down.\n";
-	std::this_thread::sleep_for(std::chrono::seconds(2));
-	ctx->SetState(std::make_unique<RedLightState>());
-}
-
-void RedLightState::Handle(simplistic::fsm::IContext* ctx)
-{
-	std::cout << "Light is RED | Stop.\n";
-	std::this_thread::sleep_for(std::chrono::seconds(10));
-	ctx->SetState(std::make_unique<GreenLightState>());
+		semCtrller.Handle();
 }
