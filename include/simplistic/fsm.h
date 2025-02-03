@@ -131,7 +131,7 @@ namespace simplistic { namespace fsm {
 				return;
 
 			// realizing the queued to current
-			*mCurrent = std::move(*mQueuedNext);
+			mCurrent = std::move(*mQueuedNext);
 			if (mQueuedStg) mCurrentStg = std::move(mQueuedStg);
 			mQueuedNext.reset();
 			mQueuedStg.reset();
