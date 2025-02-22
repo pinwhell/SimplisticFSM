@@ -1,22 +1,22 @@
 #include <iostream>
 #include <thread>
-//#include <simplistic/fsm.h>
-#include "../include/simplistic/fsm.h"
+#include <simplistic/fsm.h>
 
 using namespace simplistic::fsm;
+using SFMUnifiedReason = simplistic::fsm::UnifiedHandle::HandleReason;
 
 class SemaphoreController : public simplistic::fsm::Context {
 public:
 	SemaphoreController()
-		: simplistic::fsm::Context(SFSM_THISCTXSTATE(SemaphoreController::GreenLightState))
+		: simplistic::fsm::Context(SFSM_UNIFIEDWTHIS(&SemaphoreController::GreenLightState))
 	{}
 
-	void GreenLightState(simplistic::fsm::IContext* ctx, bool entry)
+	void GreenLightState(simplistic::fsm::IContext* ctx, SFMUnifiedReason reason)
 	{
-		if (entry) return;
+		if (reason == SFMUnifiedReason::ENTER) return;
 		std::cout << "Light is Green | Free to go.\n";
 		std::this_thread::sleep_for(std::chrono::seconds(5));
-		ctx->SetState(std::make_unique<OrangeLightState>(this));
+		ctx->Apply(std::make_unique<OrangeLightState>(this));
 	}
 
 	class OrangeLightState : public simplistic::fsm::IState {
@@ -25,24 +25,22 @@ public:
 			: mController(crller)
 		{}
 
-		void Handle(simplistic::fsm::IContext* ctx)
+		void operator()(simplistic::fsm::IContext* ctx)
 		{
 			std::cout << "Light is Orange | Slow Down.\n";
 			std::this_thread::sleep_for(std::chrono::seconds(2));
-			ctx->SetState(SFSM_CTXSTATE(
-				ctx,
-				SemaphoreController::RedLightState,
-				mController));
+			ctx->Apply(SFSM_UNIFIEDWTHIS2(mController,
+				&SemaphoreController::RedLightState));
 		}
 		SemaphoreController* mController;
 	};
 
-	void RedLightState(simplistic::fsm::IContext* ctx, bool entry)
+	void RedLightState(simplistic::fsm::IContext* ctx, SFMUnifiedReason reason)
 	{
-		if (entry) return;
+		if (reason == SFMUnifiedReason::ENTER) return;
 		std::cout << "Light is RED | Stop.\n";
 		std::this_thread::sleep_for(std::chrono::seconds(10));
-		ctx->SetState(SFSM_THISCTXSTATE(SemaphoreController::GreenLightState));
+		ctx->Apply(SFSM_UNIFIEDWTHIS(&SemaphoreController::GreenLightState));
 	}
 };
 
@@ -51,5 +49,5 @@ int main()
 	SemaphoreController semCtrller;
 
 	while (true)
-		semCtrller.Handle();
+		semCtrller();
 }

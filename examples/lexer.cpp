@@ -40,7 +40,7 @@ namespace Tokenizer {
     // Initial state (starting point)
     class InitialState : public IState {
     public:
-        void Handle(IContext* _ctx) override;
+        void operator()(IContext* _ctx) override;
         void OnFinishDetected(Context* ctx);
     };
 
@@ -49,7 +49,7 @@ namespace Tokenizer {
     public:
         explicit TokenState(std::string token);
 
-        void Handle(IContext* _ctx) override;
+        void operator()(IContext* _ctx) override;
 
     private:
         std::string mToken;
@@ -60,14 +60,16 @@ namespace Tokenizer {
     public:
         explicit NumberState(std::string number);
 
-        void Handle(IContext* _ctx) override;
+        void operator()(IContext* _ctx) override;
 
     private:
         std::string mNumber;
     };
 
     Context::Context(const std::string& input)
-        : ::Context(std::make_unique<InitialState>()), mInput(input), mPos(0) {}
+        : mInput(input), mPos(0) {
+        Apply(std::make_unique<InitialState>());
+    }
 
     bool Context::Finished()
     {
@@ -91,29 +93,29 @@ namespace Tokenizer {
         }
     }
 
-    void InitialState::Handle(IContext* _ctx) {
+    void InitialState::operator()(IContext* _ctx) {
         Context* ctx = dynamic_cast<Context*>(_ctx);
         if (ctx->Finished())
             OnFinishDetected(ctx);
 
         char ch = ctx->GetNextChar();
         if (isalpha(ch)) {
-            ctx->SetState(std::make_unique<TokenState>(std::string(1, ch)));
+            ctx->Apply(std::make_unique<TokenState>(std::string(1, ch)));
         }
         else if (isdigit(ch)) {
-            ctx->SetState(std::make_unique<NumberState>(std::string(1, ch)));
+            ctx->Apply(std::make_unique<NumberState>(std::string(1, ch)));
         }
         else if (ch == '=') {
             ctx->EmitToken("OPERATOR", std::string(1, ch));
-            ctx->SetState(std::make_unique<InitialState>());
+            ctx->Apply(std::make_unique<InitialState>());
         }
         else if (ch == ';')
         {
             ctx->EmitToken("DELIMITER", std::string(1, ch));
-            ctx->SetState(std::make_unique<InitialState>());
+            ctx->Apply(std::make_unique<InitialState>());
         }
         else if (isspace(ch)) {
-            ctx->SetState(std::make_unique<InitialState>());
+            ctx->Apply(std::make_unique<InitialState>());
         }
         else if (ch == '\0') {
             OnFinishDetected(ctx);
@@ -126,38 +128,38 @@ namespace Tokenizer {
     void InitialState::OnFinishDetected(Context* ctx)
     {
         ctx->Finalize();
-        ctx->SetState(0); // NULL State!
+        ctx->ApplyNull();
     }
 
     TokenState::TokenState(std::string token) : mToken(std::move(token)) {}
 
-    void TokenState::Handle(IContext* _ctx) {
+    void TokenState::operator()(IContext* _ctx) {
         Context* ctx = dynamic_cast<Context*>(_ctx);
         char ch = ctx->GetNextChar();
         if (isalnum(ch)) {
             mToken += ch;
-            ctx->SetState(std::make_unique<TokenState>(mToken));
+            ctx->Apply(std::make_unique<TokenState>(mToken));
         }
         else {
             ctx->RevertOneChar();
             ctx->EmitToken(keywords.count(mToken) ? "KEYWORD" : "IDENTIFIER", mToken);
-            ctx->SetState(std::make_unique<InitialState>());
+            ctx->Apply(std::make_unique<InitialState>());
         }
     }
 
     NumberState::NumberState(std::string number) : mNumber(std::move(number)) {}
 
-    void NumberState::Handle(IContext* _ctx) {
+    void NumberState::operator()(IContext* _ctx) {
         Context* ctx = dynamic_cast<Context*>(_ctx);
         char ch = ctx->GetNextChar();
         if (isdigit(ch)) {
             mNumber += ch;
-            ctx->SetState(std::make_unique<NumberState>(mNumber));
+            ctx->Apply(std::make_unique<NumberState>(mNumber));
         }
         else {
             ctx->RevertOneChar();
             ctx->EmitToken("NUMBER", mNumber);
-            ctx->SetState(std::make_unique<InitialState>());
+            ctx->Apply(std::make_unique<InitialState>());
         }
     }
 
@@ -190,81 +192,81 @@ namespace Lexer {
     };
 
     class ControllerState : public IState {
-        void Handle(IContext* ctx) override;
+        void operator()(IContext* ctx) override;
     };
 
     class KeywordState : public IState {
-        void Handle(IContext* ctx) override;
+        void operator()(IContext* ctx) override;
     };
 
-    class SetState : public IState {
+    class Apply : public IState {
     public:
-        void Handle(simplistic::fsm::IContext* ctx) override;
+        void operator()(simplistic::fsm::IContext* ctx) override;
     };
 
     class PrintState : public IState {
     public:
-        void Handle(simplistic::fsm::IContext* ctx) override;
+        void operator()(simplistic::fsm::IContext* ctx) override;
     };
 
     class IdentifierState : public IState {
     public:
         IdentifierState(std::function<void()> onPass);
-        void Handle(simplistic::fsm::IContext* ctx) override;
+        void operator()(simplistic::fsm::IContext* ctx) override;
         std::function<void()> mOnPass;
     };
 
     class OperatorState : public IState {
     public:
         OperatorState(std::function<void()> onPass);
-        void Handle(IContext* ctx) override;
+        void operator()(IContext* ctx) override;
         std::function<void()> mOnPass;
     };
 
     class LiteralState : public IState {
     public:
-        void Handle(simplistic::fsm::IContext* ctx) override;
+        void operator()(simplistic::fsm::IContext* ctx) override;
     };
 
     class DelimiterState : public IState {
     public:
-        void Handle(simplistic::fsm::IContext* ctx) override;
+        void operator()(simplistic::fsm::IContext* ctx) override;
     };
 
     class ErrorState : public IState {
     public:
-        void Handle(simplistic::fsm::IContext* ctx) override;
+        void operator()(simplistic::fsm::IContext* ctx) override;
     };
 
-    void SetState::Handle(IContext* ctx) {
+    void Apply::operator()(IContext* ctx) {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
 
         if (token.second == "SET") {
             lexerCtx->AdvanceToken();
-            lexerCtx->SetState(std::make_unique<IdentifierState>([lexerCtx] {
-                lexerCtx->SetState(std::make_unique<OperatorState>([lexerCtx] {
-                    lexerCtx->SetState(std::make_unique<LiteralState>());
+            ctx->Apply(std::make_unique<IdentifierState>([ctx] {
+                ctx->Apply(std::make_unique<OperatorState>([ctx] {
+                    ctx->Apply(std::make_unique<LiteralState>());
                     }));
                 }));
         }
         else {
-            lexerCtx->SetState(std::make_unique<ErrorState>());
+            ctx->Apply(std::make_unique<ErrorState>());
         }
     }
 
-    void PrintState::Handle(IContext* ctx) {
+    void PrintState::operator()(IContext* ctx) {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
 
         if (token.second == "PRINT") {
             lexerCtx->AdvanceToken();
-            lexerCtx->SetState(std::make_unique<IdentifierState>([lexerCtx] {
-                lexerCtx->SetState(std::make_unique<DelimiterState>());
+            ctx->Apply(std::make_unique<IdentifierState>([ctx] {
+                ctx->Apply(std::make_unique<DelimiterState>());
                 }));
         }
         else {
-            lexerCtx->SetState(std::make_unique<ErrorState>());
+            ctx->Apply(std::make_unique<ErrorState>());
         }
     }
 
@@ -273,7 +275,7 @@ namespace Lexer {
     {
     }
 
-    void IdentifierState::Handle(IContext* ctx) {
+    void IdentifierState::operator()(IContext* ctx) {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
 
@@ -282,24 +284,24 @@ namespace Lexer {
             mOnPass();
         }
         else {
-            lexerCtx->SetState(std::make_unique<ErrorState>());
+            ctx->Apply(std::make_unique<ErrorState>());
         }
     }
 
-    void LiteralState::Handle(IContext* ctx) {
+    void LiteralState::operator()(IContext* ctx) {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
 
         if (token.first == "NUMBER" || token.first == "LITERAL") {
             lexerCtx->AdvanceToken();
-            lexerCtx->SetState(std::make_unique<DelimiterState>());
+            ctx->Apply(std::make_unique<DelimiterState>());
         }
         else {
-            lexerCtx->SetState(std::make_unique<ErrorState>());
+            ctx->Apply(std::make_unique<ErrorState>());
         }
     }
 
-    void DelimiterState::Handle(IContext* ctx) {
+    void DelimiterState::operator()(IContext* ctx) {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
 
@@ -307,26 +309,27 @@ namespace Lexer {
             lexerCtx->AdvanceToken();
             if (lexerCtx->IsEndOfTokens()) {
                 std::cout << "Lexing successful!" << std::endl;
-                lexerCtx->SetState(0); // End processing
+                lexerCtx->ApplyNull(); // End processing
             }
             else {
-                lexerCtx->SetState(std::make_unique<ControllerState>());
+                ctx->Apply(std::make_unique<ControllerState>());
             }
         }
         else {
-            lexerCtx->SetState(std::make_unique<ErrorState>());
+            ctx->Apply(std::make_unique<ErrorState>());
         }
     }
 
-    void ErrorState::Handle(IContext* ctx) {
+    void ErrorState::operator()(IContext* ctx) {
         std::cerr << "Lexer Error: Unexpected token or state." << std::endl;
         // Transition to an error state or halt further processing
-        ctx->SetState(0, true); // End processing
+        ctx->Apply(0, true); // End processing
     }
 
     Context::Context(std::vector<Token> tokens)
-        : mTokens(std::move(tokens)), mCurrentTokenIndex(0), ::Context(std::make_unique<KeywordState>()) {
-        // Initialize with an appropriate state, e.g., SetState or PrintState
+        : mTokens(std::move(tokens)), mCurrentTokenIndex(0) {
+        // Initialize with an appropriate state, e.g., Apply or PrintState
+        IContext::Apply(std::make_unique<KeywordState>());
     }
     Context::Token Context::GetCurrentToken() {
         if (mCurrentTokenIndex < mTokens.size()) {
@@ -347,21 +350,21 @@ namespace Lexer {
 
     // Inherited via IState
 
-    void ControllerState::Handle(IContext* ctx)
+    void ControllerState::operator()(IContext* ctx)
     {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
 
         if (token.first == "KEYWORD")
         {
-            ctx->SetState(std::make_unique<KeywordState>());
+            ctx->Apply(std::make_unique<KeywordState>());
             return;
         }
 
-        ctx->SetState(std::make_unique<ErrorState>());
+        ctx->Apply(std::make_unique<ErrorState>());
     }
 
-    void KeywordState::Handle(IContext* ctx)
+    void KeywordState::operator()(IContext* ctx)
     {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
@@ -369,19 +372,19 @@ namespace Lexer {
         if (keywords.count(token.second))
         {
             if(token.second == "SET")
-                return ctx->SetState(std::make_unique<SetState>());
+                return ctx->Apply(std::make_unique<Apply>());
             else if (token.second == "PRINT")
-                return ctx->SetState(std::make_unique<PrintState>());
+                return ctx->Apply(std::make_unique<PrintState>());
         }
 
-        ctx->SetState(std::make_unique<ErrorState>());        
+        ctx->Apply(std::make_unique<ErrorState>());        
     }
     OperatorState::OperatorState(std::function<void()> onPass)
         : mOnPass(onPass)
     {
     }
 
-    void OperatorState::Handle(IContext* ctx)
+    void OperatorState::operator()(IContext* ctx)
     {
         auto lexerCtx = static_cast<Context*>(ctx);
         auto token = lexerCtx->GetCurrentToken();
@@ -393,7 +396,7 @@ namespace Lexer {
             return;
         }
 
-        ctx->SetState(std::make_unique<ErrorState>());
+        ctx->Apply(std::make_unique<ErrorState>());
     }
 }
 
@@ -411,12 +414,12 @@ int main()
         PRINT aa2;    
     )");
     while (!tknzrCtx.Finished())
-        tknzrCtx.Handle();
+        tknzrCtx.operator()();
     auto allTkns = tknzrCtx.GetTokens();
     for(const auto& currTT : allTkns)
         std::cout << "[" << currTT.first << "] : [" << currTT.second << "]" << std::endl;
     Lexer::Context lxrCtx(allTkns);
-    while (lxrCtx.mCurrent && !lxrCtx.IsEndOfTokens())
-        lxrCtx.Handle();
+    while (Context::GetState(lxrCtx.mCurrent) && !lxrCtx.IsEndOfTokens())
+        lxrCtx.operator()();
 
 }

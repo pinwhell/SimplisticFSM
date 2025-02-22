@@ -1,146 +1,223 @@
 #pragma once
 
 #include <memory>
-#ifdef SFSM_MT
-#include <mutex>
-#endif
 #include <functional>
 #include <variant>
 #include <optional>
 #include <type_traits>
+#include <mutex>
 
 namespace simplistic { namespace fsm {
 	class IContext;
 
-	struct State {
+	class IState {
+	public:
+		inline virtual ~IState() = default;
+		inline virtual void Enter(IContext* ctx) {};
+		inline virtual void operator()(IContext* ctx) {}
+		inline virtual void Exit(IContext* ctx) {};
+	};
 
-		using SimpleHandle = std::function<void(IContext*)>;
-		using FullHandle = std::function<void(IContext*, bool)>;
+	struct SegmentedHandle {
+		using Handle = std::function<void(IContext*)>;
 
-		inline State(IContext* ctx,
-			std::function<void(IContext*)> handle,
-			std::function<void(IContext*)> enter,
-			std::function<void(IContext*)> exit)
-			: mContext(ctx)
-			, mEnter(enter)
-			, mHandle(handle)
-			, mExit(exit)
-		{
-			if(mEnter) mEnter(ctx);
+		template <typename T>
+		inline SegmentedHandle(T&& handle, std::optional<Handle> enter = {}, std::optional<Handle> exit = {})
+			: mEnter(std::move(enter)), mHandle(std::forward<T>(handle)), mExit(std::move(exit)) {}
+
+		inline SegmentedHandle(SegmentedHandle&& other) noexcept
+			: mEnter(std::move(other.mEnter))
+			, mHandle(std::move(other.mHandle))
+			, mExit(std::move(other.mExit)) {}
+
+		inline SegmentedHandle& operator=(SegmentedHandle&& other) noexcept {
+			if (this != &other) {
+				mEnter = std::move(other.mEnter);
+				mHandle = std::move(other.mHandle);
+				mExit = std::move(other.mExit);
+			}
+			return *this;
 		}
 
-		inline State(IContext* ctx,
-			std::function<void(IContext*, bool)> handle)
-			: mContext(ctx)
-			, mEnter(0)
-			, mHandle(handle)
-			, mExit(0)
-		{
-			handle(mContext, true);
+		inline void Enter(IContext* ctx) { if (mEnter) (*mEnter)(ctx); }
+		inline void operator()(IContext* ctx) { mHandle(ctx); }
+		inline void Exit(IContext* ctx) { if (mExit) (*mExit)(ctx); }
+
+		std::optional<Handle> mEnter;
+		Handle mHandle;
+		std::optional<Handle> mExit;
+	};
+
+	struct UnifiedHandle {
+		enum class HandleReason { ENTER, HANDLE, EXIT };
+		using Handle = std::function<void(IContext*, HandleReason)>;
+
+		template <typename T>
+		inline UnifiedHandle(T&& handler) : mHandle(std::forward<T>(handler)) {}
+
+		inline UnifiedHandle(UnifiedHandle&& other) noexcept
+			: mHandle(std::move(other.mHandle)) {}
+
+		inline UnifiedHandle& operator=(UnifiedHandle&& other) noexcept {
+			if (this != &other) mHandle = std::move(other.mHandle);
+			return *this;
 		}
 
-		void Handle(IContext* ctx)
+		inline void Enter(IContext* ctx) { mHandle(ctx, HandleReason::ENTER); }
+		inline void operator()(IContext* ctx) { mHandle(ctx, HandleReason::HANDLE); }
+		inline void Exit(IContext* ctx) { mHandle(ctx, HandleReason::EXIT); }
+
+		Handle mHandle;
+	};
+
+	struct InterfacedHandle {
+		using Storage = std::variant<std::unique_ptr<IState>, std::shared_ptr<IState>, IState*>;
+
+		template <typename T>
+		inline InterfacedHandle(T&& state)
+			: mStateStorage(std::move(state)), mState(GetBasePtr()) {}
+
+		inline InterfacedHandle(InterfacedHandle&& other) noexcept
+			: mStateStorage(std::move(other.mStateStorage))
+			, mState(GetBasePtr()) {}
+
+		inline InterfacedHandle& operator=(InterfacedHandle&& other) noexcept {
+			if (this != &other) {
+				mStateStorage = std::move(other.mStateStorage);
+				mState = GetBasePtr();
+			}
+			return *this;
+		}
+
+		inline void Enter(IContext* ctx) { mState->Enter(ctx); }
+		inline void operator()(IContext* ctx) { (*mState)(ctx); }
+		inline void Exit(IContext* ctx) { mState->Exit(ctx); }
+
+	private:
+		inline IState* GetBasePtr() {
+			return std::visit([](auto& s) -> IState* {
+				if constexpr (std::is_pointer_v<std::decay_t<decltype(s)>>) return s;
+				else return s.get();
+				}, mStateStorage);
+		}
+
+		Storage mStateStorage;
+		IState* mState;
+	};
+
+	struct Handle {
+		using Any = std::variant<
+			UnifiedHandle, 
+			InterfacedHandle, 
+			SegmentedHandle>;
+		template <typename T>
+		inline explicit Handle(T&& handle)
+			: mHandle(std::move(handle)) {}
+
+		inline Handle(Handle&& other) noexcept : mHandle(std::move(other.mHandle)) {}
+
+		inline Handle& operator=(Handle&& other) noexcept
 		{
-			std::visit([this](auto cb) {
-				using StateHandle = std::decay_t<decltype(cb)>;
-				if (!cb) return;
-				if constexpr (std::is_same_v<StateHandle, SimpleHandle>)
-					cb(mContext);
-				else 
-					cb(mContext, false);
+			if (this != &other) mHandle = std::move(other.mHandle);
+			return *this;
+		}
+
+		inline void Enter(IContext* ctx)
+		{
+			std::call_once(mEnterOnceFlag, [this, ctx] {
+				std::visit([ctx](auto& handle) {
+					handle.Enter(ctx);
+					}, mHandle);
+				});
+		}
+
+		inline void operator()(IContext* ctx)
+		{
+			std::visit([this, ctx](auto& handle) {
+				handle(ctx);
 				}, mHandle);
 		}
 
-		~State()
+		inline void Exit(IContext* ctx)
 		{
-			if(mExit) mExit(mContext);
+			std::call_once(mExitOnceFlag, [this, ctx] {
+				std::visit([ctx](auto& handle) {
+					handle.Enter(ctx);
+					}, mHandle);
+				});
 		}
 
-		IContext* mContext;
-		std::function<void(IContext*)> mEnter;
-		std::variant<SimpleHandle, FullHandle> mHandle;
-		std::function<void(IContext*)> mExit;
-	};
-
-	class IState {
-	public:
-		virtual ~IState() = default;
-		virtual void Handle(IContext* ctx) = 0;
+		Handle::Any mHandle;
+		std::once_flag mEnterOnceFlag;
+		std::once_flag mExitOnceFlag;
 	};
 
 	class IContext {
 	public:
-		virtual ~IContext() = default;
-		virtual void SetState(std::variant<IState*, State>&& newState, bool bImmidiateOverride = false) = 0;
-		virtual void SetState(std::unique_ptr<IState> newState, bool bImmidiateOverride = false) = 0;
-		virtual void Handle() = 0;
+		inline IContext(){}
+		inline virtual ~IContext() = default;
+		inline virtual void Apply(std::optional<Handle>&& newState, bool immApply = false) = 0;
+		inline void Apply(std::unique_ptr<IState> state, bool immApply = false) {
+			Apply(Handle(InterfacedHandle(std::move(state))), immApply);  // Calls the Handle constructor accepting unique_ptr
+		}
+		inline void ApplyShared(std::shared_ptr<IState> state, bool immApply = false) {
+			Apply(Handle(InterfacedHandle(state)), immApply);  // Calls the Handle constructor accepting shared_ptr
+		}
+		inline void ApplyNull(bool immApply = false) { Apply(std::optional<Handle>{}, immApply); }
+		inline virtual void operator()() {}
 	};
 
 	class Context : public IContext {
 	public:
-		inline Context() = default;
-		inline Context(std::unique_ptr<IState> initialState)
-			: mCurrent(initialState.get())
-			, mCurrentStg(std::move(initialState))
-		{}
-		inline Context(std::variant<IState*, State>&& initialState)
+		using AnyState = std::variant<fsm::Handle, fsm::Handle*>;
+
+		inline Context() : mCurrent(nullptr), mNextQueue(nullptr) {}
+		inline Context(fsm::Handle&& initialState)
 			: mCurrent(std::move(initialState))
+			, mNextQueue(nullptr)
 		{}
-
-		inline void SetState(std::variant<IState*, State>&& newState, bool bImmidiateOverride = false)
+		using IContext::Apply;
+		inline virtual void Apply(std::optional<Handle>&& newState, bool immApply = false)
 		{
 #ifdef SFSM_MT
 			std::lock_guard<std::mutex> queueLock(mQueueMutex);
 #endif
-			auto& dst = bImmidiateOverride ? mCurrent : mQueuedNext;
-			dst = std::move(newState);
+			auto& dst = immApply ? mCurrent : mNextQueue;
+			if (immApply) if (auto* currState = GetState(dst)) currState->Exit(this);
+			dst = newState ? std::move(*newState) : AnyState(nullptr);
+			if (immApply) if (auto* currState = GetState(dst)) currState->Enter(this);
 		}
 
-		inline void SetState(std::unique_ptr<IState> newState, bool bImmidiateOverride = false)
+		inline void operator()()
+		{
+			DoApply();
+			if (auto* state = GetState(mCurrent)) (*state)(this);
+		}
+
+		inline void DoApply()
 		{
 #ifdef SFSM_MT
 			std::lock_guard<std::mutex> queueLock(mQueueMutex);
 #endif
-
-			auto& dst = bImmidiateOverride ? mCurrent : mQueuedNext;
-			auto& dstStg = bImmidiateOverride ? mCurrentStg : mQueuedStg;
-			dst = newState.get();
-			dstStg = std::move(newState);
+			if (!GetState(mNextQueue)) return;
+			if (auto* currState = GetState(mCurrent)) currState->Exit(this);
+			if (auto* currState = (GetState(mCurrent = 
+				std::move(mNextQueue)))) currState->Enter(this);
+			mNextQueue = nullptr;
 		}
 
-		inline void Handle()
+		static fsm::Handle* GetState(AnyState& state)
 		{
-			FlushQueue();
-
-			if (mCurrent) std::visit([this](auto& state) {
-				using StateType = std::decay_t<decltype(state)>;
-				if constexpr (std::is_same_v<StateType, State>)
-					state.Handle(this);
-				else 
-					state->Handle(this);
-				}, *mCurrent);
+			return std::visit([](auto& curr) -> fsm::Handle* {
+				using TQueue = std::remove_reference_t<decltype(curr)>;
+				if constexpr (std::is_pointer_v<TQueue>)
+					return curr;
+				else return &curr;
+				}, state);
 		}
 
-		inline void FlushQueue()
-		{
-#ifdef SFSM_MT
-			std::lock_guard<std::mutex> queueLock(mQueueMutex);
-#endif
-
-			if (!mQueuedNext)
-				return;
-
-			// realizing the queued to current
-			mCurrent = std::move(*mQueuedNext);
-			if (mQueuedStg) mCurrentStg = std::move(mQueuedStg);
-			mQueuedNext.reset();
-			mQueuedStg.reset();
-		}
-
-		std::optional<std::variant<IState*, State>> mCurrent;
-		std::optional<std::variant<IState*, State>> mQueuedNext;
-		std::unique_ptr<IState> mCurrentStg;
-		std::unique_ptr<IState> mQueuedStg;
+		AnyState mCurrent;
+		AnyState mNextQueue;
 #ifdef SFSM_MT
 		std::mutex mQueueMutex;
 #endif
@@ -148,10 +225,15 @@ namespace simplistic { namespace fsm {
 }
 }
 
-#define SFSM_CTXSTATE(ctx, state, _this) State(ctx, std::bind( \
-	&state,\
-	_this,\
-	std::placeholders::_1, \
-	std::placeholders::_2))
+#define SFSM_UNIFIED(state) simplistic::fsm::Handle( \
+simplistic::fsm::UnifiedHandle(state))
 
-#define SFSM_THISCTXSTATE(state) SFSM_CTXSTATE(this, state, this)
+#define SFSM_UNIFIEDWTHIS2(_this, state) SFSM_UNIFIED( \
+std::bind( \
+	state, \
+	(_this), \
+	std::placeholders::_1, \
+	std::placeholders::_2) \
+)
+
+#define SFSM_UNIFIEDWTHIS(state) SFSM_UNIFIEDWTHIS2(this, (state))

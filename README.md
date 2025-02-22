@@ -1,3 +1,4 @@
+
 ## Introduction
 
 `simplistic-fsm` is a lightweight C++ single header library for implementing finite state machines (FSM). It provides a straightforward API to define states and manage state transitions within a context. The library supports basic state management with optional thread safety. Ideal for projects needing a simple yet effective way to handle state-driven logic.
@@ -52,7 +53,9 @@ Create a minimal example to get started:
 
 class StateA : public simplistic::fsm::IState {
 public:
-    void Handle(simplistic::fsm::IContext* ctx) override {
+    void Enter() override {} // Optional
+    void Exit()  override {} // Optional
+    void operator()(simplistic::fsm::IContext* ctx) override {
         std::cout << "State A\n";
         ctx->SetState(std::make_unique<StateB /*Impl must be visible*/ >());
     }
@@ -60,7 +63,9 @@ public:
 
 class StateB : public simplistic::fsm::IState {
 public:
-    void Handle(simplistic::fsm::IContext* ctx) override {
+    void Enter() override {} // Optional
+    void Exit()  override {} // Optional
+    void operator()(simplistic::fsm::IContext* ctx) override {
         std::cout << "State B\n";
         // Transition to State A again to demonstrate cycling
         ctx->SetState(std::make_unique<StateA>());
@@ -70,10 +75,10 @@ public:
 3. **Setup Context**
 ```cpp
 int main() {
-    simplistic::fsm::Context context(std::make_unique<StateA>());
+    simplistic::fsm::Context ctx; ctx.Apply(std::make_unique<StateA>());
 
     for (int i = 0; i < 4; ++i) { // Loop to demonstrate state transitions
-        context.Handle();
+        ctx();
     }
 
     return 0;
