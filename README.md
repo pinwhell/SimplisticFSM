@@ -57,7 +57,7 @@ public:
     void Exit()  override {} // Optional
     void operator()(simplistic::fsm::IContext* ctx) override {
         std::cout << "State A\n";
-        ctx->SetState(std::make_unique<StateB /*Impl must be visible*/ >());
+        ctx->Apply(std::make_unique<StateB /*Impl must be visible*/ >());
     }
 };
 
@@ -68,7 +68,7 @@ public:
     void operator()(simplistic::fsm::IContext* ctx) override {
         std::cout << "State B\n";
         // Transition to State A again to demonstrate cycling
-        ctx->SetState(std::make_unique<StateA>());
+        ctx->Apply(std::make_unique<StateA>());
     }
 };
 ```
